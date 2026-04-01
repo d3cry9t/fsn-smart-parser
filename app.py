@@ -63,7 +63,7 @@ col1, col2 = st.columns([3, 1])
 
 with col1:
     user_input = st.text_area("Paste Scenarios:", height=400, 
-                              placeholder="Example: kaise bhi daaldo fan aur value hona chahiye")
+                              placeholder="kaise bhi daaldo fan aur value hona chahiye & if LT is required just mention 'LT' word")
 
 with col2:
     mode = st.radio("Select Mode:", ["Percentage", "ASP", "P0"])
