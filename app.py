@@ -87,12 +87,12 @@ with tab1:
     
     with col2:
         st.subheader("Config")
-        mode = st.radio("Mode:", ["Percentage", "ASP", "P0"])
+        mode = st.radio("Mode:", ["Percentage", "ASP", "Mrp"])
         
         key_map = {
             "Percentage": ['UT_disc_percent_cat', 'UT_disc_percent', 'LT_disc_percent'],
             "ASP": ['custom_14', 'UT_absolute', 'LT_absolute'],
-            "P0": ['mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent']
+            "Mrp": ['mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent']
         }
         
         st.write("**Keys to Include:**")
