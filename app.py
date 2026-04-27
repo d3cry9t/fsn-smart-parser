@@ -1,3 +1,4 @@
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import io
@@ -76,7 +77,7 @@ def clean_anomalies(df):
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Ops Hub", layout="wide")
 
-st.title("🛡️ Operations Automation Hub")
+st.title("🛡️ Pricing Operations Hub")
 
 # Create Tabs - This is where your previous error occurred
 tab1, tab2 = st.tabs(["🚀 Pricing CSV Generator", "🧹 Anomaly Cleaner"])
@@ -124,19 +125,24 @@ with tab2:
             else:
                 input_df = pd.read_excel(up_file, engine='openpyxl')
                 
-            if st.button("Run Deep Clean", type="primary"):
+            if st.button("Clean", type="primary"):
                 with st.spinner("Processing large dataset..."):
                     cleaned_df, result = clean_anomalies(input_df)
                 
                 if cleaned_df is not None:
                     st.success(f"Cleaning Complete! {result} rows removed.")
                     
-                    # Store as CSV for maximum compatibility and speed
+                    # Generate current timestamp (Format: DD-MM-YYYY_HH-MM)
+                    timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M")
+                    filename = f"Anomalies_Cleaned_{timestamp}.csv"
+                    
+                    # Store as CSV
                     csv_out = cleaned_df.to_csv(index=False).encode('utf-8')
+                    
                     st.download_button(
-                        label="📥 Download Cleaned CSV",
+                        label=f"📥 Download {filename}",
                         data=csv_out,
-                        file_name="Anomalies_Cleaned.csv",
+                        file_name=filename,
                         mime="text/csv"
                     )
                 else:
