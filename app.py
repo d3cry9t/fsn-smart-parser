@@ -4,7 +4,7 @@ import pandas as pd
 import re
 
 # --- LOGIC: CSV GENERATOR ---
-def parse_advanced_scenarios(raw_text, mode, selected_keys, is_sale_live):
+def parse_advanced_scenarios(raw_text, mode, selected_keys):
     if not selected_keys:
         return pd.DataFrame()
 
@@ -18,33 +18,56 @@ def parse_advanced_scenarios(raw_text, mode, selected_keys, is_sale_live):
         fsn = blocks[i].strip()
         context = blocks[i+1].upper() if i+1 < len(blocks) else ""
         
-        # 1. Extraction Logic
-        perc_match = re.search(r'\b(\d+(?:\.\d+)?)\s*%', context)
-        asp_match = re.search(r'(?:ASP|RS\.?|PRICE)\s*(\d+(?:\.\d+)?)', context)
-        
-        # Fallback if no symbols are used (based on mode)
-        fallback = re.search(r'\b(\d+(?:\.\d+)?)\b', context)
-        
-        base_perc = float(perc_match.group(1)) if perc_match else (float(fallback.group(1)) if (fallback and "ASP" not in mode and "BAU" in mode) else 0.0)
-        base_asp = float(asp_match.group(1)) if asp_match else (float(fallback.group(1)) if (fallback and "ASP" in mode) else 0.0)
+        # Check if this specific FSN block is an Event/Sale
+        is_event = any(word in context for word in ["SALE", "EVENT", "LIVE"])
 
-        # LT Plus logic (+5 etc)
-        lt_plus = re.search(r'(?:\+|\bPLUS\b)\s*(\d+)', context)
-        add_val = float(lt_plus.group(1)) if lt_plus else 0.0
+        # Find all numbers in the block
+        numbers = re.findall(r'(-?\d+(?:\.\d+)?)', context)
+        
+        base_perc = None
+        base_asp = None
+        lt_modifier = 0.0
 
+        # Detect LT modifier (Plus/Minus logic)
+        lt_mod_match = re.search(r'(?:LT|PLUS|MINUS)\s*(-?\d+)', context)
+        if lt_mod_match:
+            lt_modifier = float(lt_mod_match.group(1))
+
+        # Categorize numbers found in the block
+        for num_str in numbers:
+            num = float(num_str)
+            # Skip if it's the LT modifier itself
+            if lt_mod_match and num_str == lt_mod_match.group(1):
+                continue
+            
+            if 0 < num <= 100:
+                base_perc = num
+            elif num > 100 or num < 0: # Negative values or > 100 treated as ASP
+                base_asp = num
+
+        # Generate rows based on selected keys and detected values
         for key in selected_keys:
             val = 0.0
-            # Logic for Discount keys
+            
+            # --- DISCOUNT / BAU LOGIC ---
             if any(x in key for x in ['percent', 'disc']):
-                if base_perc == 0 and not perc_match: continue # Skip if no % found in Auto mode
-                val = (base_perc + add_val) if "LT" in key else base_perc
-            
-            # Logic for ASP keys
+                if base_perc is not None:
+                    # Handle Event swap for %
+                    if is_event and key == 'UT_disc_percent_cat': continue # Skip BAU key in event
+                    if not is_event and key == 'mrp_disc_percent': continue # Skip Event key in BAU
+                    
+                    val = (base_perc + lt_modifier) if "LT" in key else base_perc
+                    data_rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
+
+            # --- ASP LOGIC ---
             elif any(x in key for x in ['absolute', 'custom']):
-                if base_asp == 0 and not asp_match: continue # Skip if no ASP found in Auto mode
-                val = (base_asp + add_val) if "LT" in key else base_asp
-            
-            data_rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
+                if base_asp is not None:
+                    # Handle Event swap for ASP
+                    if is_event and key == 'custom_14': continue
+                    if not is_event and key == 'custom_15': continue
+                    
+                    val = (base_asp + lt_modifier) if "LT" in key else base_asp
+                    data_rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
 
     return pd.DataFrame(data_rows)
 
@@ -59,42 +82,35 @@ with tab1:
     
     with col2:
         st.subheader("Config")
-        mode = st.radio("Mode:", ["BAU", "Event ASP", "Full Custom", "Auto-Detect"])
+        mode = st.radio("Mode:", ["BAU", "ASP", "Event Mode", "Auto-Detect All"])
         
-        # Sale Toggle for logic switching
-        is_sale_live = st.toggle("Is Sale/Event Live?", value=False, help="Switches UT_disc_percent_cat to mrp_disc_percent")
+        key_map = {
+            "BAU": ['UT_disc_percent_cat', 'UT_disc_percent', 'LT_disc_percent'],
+            "ASP": ['custom_14', 'UT_absolute', 'LT_absolute'],
+            "Event Mode": ['mrp_disc_percent', 'custom_15', 'UT_disc_percent', 'LT_disc_percent', 'UT_absolute', 'LT_absolute'],
+            "Auto-Detect All": [
+                'UT_disc_percent_cat', 'mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent',
+                'custom_15', 'custom_14', 'UT_absolute', 'LT_absolute'
+            ]
+        }
         
-        # Define base keys
-        perc_keys = [('mrp_disc_percent' if is_sale_live else 'UT_disc_percent_cat'), 'UT_disc_percent', 'LT_disc_percent']
-        asp_keys_14 = ['custom_14', 'UT_absolute', 'LT_absolute']
-        asp_keys_15 = ['custom_15', 'UT_absolute', 'LT_absolute']
-
-        if mode == "BAU":
-            target_keys = perc_keys
-        elif mode == "Event ASP":
-            target_keys = asp_keys_15
-        elif mode == "Full Custom":
-            target_keys = perc_keys + asp_keys_14 + asp_keys_15
-        else: # Auto-Detect
-            target_keys = perc_keys + asp_keys_14
-
         st.write("**Keys to Include:**")
-        selected_keys = [k for k in target_keys if st.checkbox(k, value=True, key=f"cb_{k}")]
+        selected_keys = [k for k in key_map[mode] if st.checkbox(k, value=True, key=f"cb_{k}")]
         generate_btn = st.button("Generate Pricing CSV", type="primary")
 
     with col1:
-        st.info(f"💡 Currently using **{'mrp_disc_percent' if is_sale_live else 'UT_disc_percent_cat'}** based on Sale toggle.")
-        user_input = st.text_area("Paste Scenarios here:", height=400, placeholder="FSN... 30%\nFSN... ASP 500")
+        st.info("""
+        **Smart Detection Rules:**
+        - Value **<= 100**: Treated as Discount/BAU.
+        - Value **> 100 or Negative**: Treated as ASP.
+        - Include word **'SALE'** or **'EVENT'** to auto-switch to Event keys (mrp_disc / custom_15).
+        - Use **'minus 100'** or **'-100'** for LT reductions.
+        """)
+        user_input = st.text_area("Paste Scenarios here:", height=400, placeholder="Example: FSN123... 50, ASP 1200, LT -100")
 
     if generate_btn and user_input:
-        res_df = parse_advanced_scenarios(user_input, mode, selected_keys, is_sale_live)
+        res_df = parse_advanced_scenarios(user_input, mode, selected_keys)
         if not res_df.empty:
-            st.success(f"Generated {len(res_df)} rows.")
+            st.success(f"Processed {len(res_df.fsn.unique())} FSNs")
             st.dataframe(res_df, use_container_width=True)
-            csv_data = res_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download CSV", csv_data, "pricing_upload.csv", "text/csv")
-
-# --- TAB 2 (Kept for completeness) ---
-with tab2:
-    st.header("Anomalies Data Clearance")
-    # ... (Same logic as previous version)
+            st.download_button("📥 Download CSV", res_df.to_csv(index=False).encode('utf-8'), "pricing_upload.csv", "text/csv")
