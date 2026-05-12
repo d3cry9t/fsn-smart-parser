@@ -8,7 +8,6 @@ def parse_advanced_scenarios(raw_text, mode, selected_keys):
     if not selected_keys:
         return pd.DataFrame()
 
-    # Split by FSN (16 char alphanumeric)
     blocks = re.split(r'([A-Z0-9]{16})', raw_text)
     if len(blocks) < 2:
         return pd.DataFrame()
@@ -18,60 +17,63 @@ def parse_advanced_scenarios(raw_text, mode, selected_keys):
         fsn = blocks[i].strip()
         context = blocks[i+1].upper() if i+1 < len(blocks) else ""
         
-        # Check if Event logic should be triggered
-        # Triggered if mode is "Event Mode" OR if "SALE/EVENT" is typed in the text
         is_event = (mode == "Event Mode") or any(word in context for word in ["SALE", "EVENT", "LIVE"])
 
-        # Find all numbers
+        # Extract all numbers
         numbers = re.findall(r'(-?\d+(?:\.\d+)?)', context)
         
         base_perc = None
         base_asp = None
-        lt_modifier = 0.0
 
-        # Detect LT modifier (Plus/Minus/Hyphen logic)
-        # Looks for "LT 10", "LT -10", "minus 10", "+10"
-        lt_mod_match = re.search(r'(?:LT|PLUS|MINUS|\+)\s*(-?\d+)', context)
-        if lt_mod_match:
-            lt_modifier = float(lt_mod_match.group(1))
+        # 1. Detect LT Logic
+        # Pattern for "LT 40" (Absolute) or "LT +5"/"LT -100" (Relative)
+        lt_abs_match = re.search(r'LT\s*(\d+(?:\.\d+)?)\b(?!\s*[\+\-])', context)
+        lt_rel_match = re.search(r'(?:LT|PLUS|MINUS|\+)\s*(-?\d+(?:\.\d+)?)', context)
 
-        # Categorize numbers: 1-100 = Discount, > 100 or < 0 = ASP
+        # 2. Categorize Base Values (Threshold 101)
         for num_str in numbers:
             num = float(num_str)
-            # Don't treat the LT modifier itself as a base value
-            if lt_mod_match and num_str == lt_mod_match.group(1):
-                continue
+            # Skip if this number is likely the LT value/modifier
+            if lt_abs_match and num_str == lt_abs_match.group(1): continue
+            if lt_rel_match and num_str == lt_rel_match.group(1): continue
             
             if 0 < num <= 100:
                 base_perc = num
             elif num > 100 or num < 0:
                 base_asp = num
 
-        # Logic for key generation
+        # 3. Process Keys
         for key in selected_keys:
             val = None
+            base = None
             
-            # --- DISCOUNT GROUP ---
-            if any(x in key for x in ['percent', 'disc']):
-                if base_perc is not None:
-                    # Switch between BAU and Event keys
-                    if is_event:
-                        if key == 'UT_disc_percent_cat': continue # Skip BAU key
-                    else:
-                        if key == 'mrp_disc_percent': continue # Skip Event key
-                    
-                    val = (base_perc + lt_modifier) if "LT" in key else base_perc
+            # Identify if key is Percentage or ASP
+            is_perc_key = any(x in key for x in ['percent', 'disc'])
+            is_asp_key = any(x in key for x in ['absolute', 'custom'])
 
-            # --- ASP GROUP ---
-            elif any(x in key for x in ['absolute', 'custom']):
-                if base_asp is not None:
-                    # Switch between custom_14 (BAU) and custom_15 (Event)
-                    if is_event:
-                        if key == 'custom_14': continue
+            # Smart Filtering (Skip in Manual Mode)
+            if mode != "Manual Selector":
+                if is_perc_key:
+                    if is_event and key == 'UT_disc_percent_cat': continue
+                    if not is_event and key == 'mrp_disc_percent': continue
+                if is_asp_key:
+                    if is_event and key == 'custom_14': continue
+                    if not is_event and key == 'custom_15': continue
+
+            # Assign Base
+            if is_perc_key: base = base_perc
+            if is_asp_key: base = base_asp
+
+            if base is not None:
+                if "LT" in key:
+                    if lt_abs_match: # "LT 40"
+                        val = float(lt_abs_match.group(1))
+                    elif lt_rel_match: # "LT +5" or "LT -100"
+                        val = base + float(lt_rel_match.group(1))
                     else:
-                        if key == 'custom_15': continue
-                    
-                    val = (base_asp + lt_modifier) if "LT" in key else base_asp
+                        val = base # Default LT = UT if no LT instruction
+                else:
+                    val = base # UT/Custom Keys
 
             if val is not None:
                 data_rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
@@ -89,34 +91,35 @@ with tab1:
     
     with col2:
         st.subheader("Config")
-        mode = st.radio("Mode:", ["BAU", "ASP", "Event Mode", "Auto-Detect All"])
+        mode = st.radio("Mode:", ["BAU", "ASP", "Event Mode", "Auto-Detect All", "Manual Selector"])
+        
+        all_possible_keys = [
+            'UT_disc_percent_cat', 'mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent',
+            'custom_15', 'custom_14', 'UT_absolute', 'LT_absolute'
+        ]
         
         key_map = {
             "BAU": ['UT_disc_percent_cat', 'UT_disc_percent', 'LT_disc_percent'],
             "ASP": ['custom_14', 'UT_absolute', 'LT_absolute'],
-            "Event Mode": [
-                'mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent',
-                'custom_15', 'UT_absolute', 'LT_absolute'
-            ],
-            "Auto-Detect All": [
-                'UT_disc_percent_cat', 'mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent',
-                'custom_15', 'custom_14', 'UT_absolute', 'LT_absolute'
-            ]
+            "Event Mode": ['mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent', 'custom_15', 'UT_absolute', 'LT_absolute'],
+            "Auto-Detect All": all_possible_keys,
+            "Manual Selector": all_possible_keys
         }
         
         st.write("**Keys to Include:**")
-        # Checkboxes are pre-selected based on mode
-        selected_keys = [k for k in key_map[mode] if st.checkbox(k, value=True, key=f"cb_{k}_{mode}")]
+        current_keys = key_map[mode]
+        selected_keys = [k for k in all_possible_keys if st.checkbox(k, value=(k in current_keys), key=f"cb_{k}_{mode}")]
+        
         generate_btn = st.button("Generate Pricing CSV", type="primary")
 
     with col1:
         st.info("""
-        **Event Mode Logic (3+3 Keys):**
-        - **Discount:** `mrp_disc_percent`, `UT_disc_percent`, `LT_disc_percent`
-        - **ASP:** `custom_15`, `UT_absolute`, `LT_absolute`
-        - **LT Logic:** If you provide `-100`, it subtracts 100 from the base value for LT keys.
+        **LT Instruction Examples:**
+        - `40, LT 35` -> UT is 40, LT is 35 (Absolute)
+        - `40, LT +5` -> UT is 40, LT is 45 (Addition)
+        - `1200, LT -100` -> UT is 1200, LT is 1100 (Subtraction)
         """)
-        user_input = st.text_area("Paste Scenarios here:", height=400, placeholder="Example:\nFSN1234567890123456\n40, 1200, LT -10")
+        user_input = st.text_area("Paste Scenarios here:", height=400)
 
     if generate_btn and user_input:
         res_df = parse_advanced_scenarios(user_input, mode, selected_keys)
