@@ -182,7 +182,7 @@ def ist_now():
 #  UI
 # =========================================================================
 st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="collapsed")
 
 MODE_LABELS = {
     "BAU":   "BAU · Standard discounts (%)",
@@ -250,29 +250,31 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("Pricing config")
-    mode = st.radio(
-        "Operation mode",
-        options=list(MODE_LABELS),
-        format_func=lambda m: MODE_LABELS[m],
-    )
-    st.caption(MODE_HELP[mode])
-    st.divider()
-
-    with st.expander("Keys to write", expanded=(mode == "Manual")):
-        defaults = MODE_KEYS[mode]
-        selected_keys = [
-            k for k in ALL_KEYS
-            if st.checkbox(k, value=(k in defaults), key=f"cb_{mode}_{k}")
-        ]
-
 tab_price, tab_clean = st.tabs(["Pricing CSV Generator", "Anomaly Cleaner"])
 
 with tab_price:
+    # --- Config, inline at the top of the tab (always visible) ----------
+    mode = st.radio(
+        "Operation mode",
+        options=list(MODE_LABELS),
+        horizontal=True,
+        format_func=lambda m: m,
+    )
+    st.caption(f"**{MODE_LABELS[mode]}** — {MODE_HELP[mode]}")
+
+    with st.expander("Keys to write", expanded=(mode == "Manual")):
+        defaults = MODE_KEYS[mode]
+        kcols = st.columns(4)
+        selected_keys = [
+            k for j, k in enumerate(ALL_KEYS)
+            if kcols[j % 4].checkbox(k, value=(k in defaults), key=f"cb_{mode}_{k}")
+        ]
+
+    st.divider()
+
     user_input = st.text_area(
         "Scenario input",
-        height=300,
+        height=280,
         placeholder="SOPFZ2G8DYPZA3TF 34, LT 39\nSPPGM5H6HHUBZQNN LT 60\nABCDEFGH12345678 0 LT 20",
         help="Each FSN is a 16-character code (A-Z, 0-9). Text up to the next code is its instruction.",
     )
@@ -282,7 +284,7 @@ with tab_price:
         if not user_input.strip():
             st.warning("Paste at least one FSN line first.")
         elif not selected_keys:
-            st.warning("Select at least one key in the sidebar.")
+            st.warning("Select at least one key above.")
         else:
             df = parse_scenarios(user_input, mode, selected_keys)
             if df.empty:
