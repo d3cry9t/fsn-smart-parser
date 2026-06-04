@@ -1,129 +1,147 @@
 from datetime import datetime
-import streamlit as st
+
 import pandas as pd
-import re
+import streamlit as st
 
-# --- LOGIC: CSV GENERATOR ---
-def parse_advanced_scenarios(raw_text, mode, selected_keys):
-    if not selected_keys:
-        return pd.DataFrame()
+from pricing_logic import ALL_KEYS, MODE_KEYS, parse_scenarios, clean_anomalies
 
-    blocks = re.split(r'([A-Z0-9]{16})', raw_text)
-    if len(blocks) < 2:
-        return pd.DataFrame()
+st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide")
 
-    data_rows = []
-    for i in range(1, len(blocks), 2):
-        fsn = blocks[i].strip()
-        context = blocks[i+1].upper() if i+1 < len(blocks) else ""
-        
-        is_event = (mode == "Event Mode") or any(word in context for word in ["SALE", "EVENT", "LIVE"])
+# --- Mode metadata --------------------------------------------------------
+MODE_LABELS = {
+    "BAU":   "BAU · Standard discounts (%)",
+    "ASP":   "ASP · Absolute price (₹)",
+    "Event": "Event / Sale · Hybrid",
+    "Auto":  "Auto-detect",
+    "Manual": "Manual",
+}
+MODE_HELP = {
+    "BAU":   "Percentage discounts for normal trading days.",
+    "ASP":   "Absolute selling-price values for ASP days.",
+    "Event": "Percentage + absolute keys for live campaigns.",
+    "Auto":  "Keeps every key; values are routed by magnitude.",
+    "Manual": "You choose exactly which keys are written.",
+}
 
-        # Extract all numbers
-        numbers = re.findall(r'(-?\d+(?:\.\d+)?)', context)
-        
-        base_perc = None
-        base_asp = None
 
-        # 1. Detect LT Logic
-        # Pattern for "LT 40" (Absolute) or "LT +5"/"LT -100" (Relative)
-        lt_abs_match = re.search(r'LT\s*(\d+(?:\.\d+)?)\b(?!\s*[\+\-])', context)
-        lt_rel_match = re.search(r'(?:LT|PLUS|MINUS|\+)\s*(-?\d+(?:\.\d+)?)', context)
+def ist_now():
+    """Current time anchored to IST, no external dependency required."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Kolkata"))
+    except Exception:
+        from datetime import timedelta, timezone
+        return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
-        # 2. Categorize Base Values (Threshold 101)
-        for num_str in numbers:
-            num = float(num_str)
-            # Skip if this number is likely the LT value/modifier
-            if lt_abs_match and num_str == lt_abs_match.group(1): continue
-            if lt_rel_match and num_str == lt_rel_match.group(1): continue
-            
-            if 0 < num <= 100:
-                base_perc = num
-            elif num > 100 or num < 0:
-                base_asp = num
 
-        # 3. Process Keys
-        for key in selected_keys:
-            val = None
-            base = None
-            
-            # Identify if key is Percentage or ASP
-            is_perc_key = any(x in key for x in ['percent', 'disc'])
-            is_asp_key = any(x in key for x in ['absolute', 'custom'])
-
-            # Smart Filtering (Skip in Manual Mode)
-            if mode != "Manual Selector":
-                if is_perc_key:
-                    if is_event and key == 'UT_disc_percent_cat': continue
-                    if not is_event and key == 'mrp_disc_percent': continue
-                if is_asp_key:
-                    if is_event and key == 'custom_14': continue
-                    if not is_event and key == 'custom_15': continue
-
-            # Assign Base
-            if is_perc_key: base = base_perc
-            if is_asp_key: base = base_asp
-
-            if base is not None:
-                if "LT" in key:
-                    if lt_abs_match: # "LT 40"
-                        val = float(lt_abs_match.group(1))
-                    elif lt_rel_match: # "LT +5" or "LT -100"
-                        val = base + float(lt_rel_match.group(1))
-                    else:
-                        val = base # Default LT = UT if no LT instruction
-                else:
-                    val = base # UT/Custom Keys
-
-            if val is not None:
-                data_rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
-
-    return pd.DataFrame(data_rows)
-
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Ops Hub", layout="wide")
+# --- Header ---------------------------------------------------------------
 st.title("🛡️ Pricing Operations Hub")
+st.caption("Turn free-text pricing notes into upload-ready files, and scrub anomaly exports in one click.")
 
-tab1, tab2 = st.tabs(["🚀 Pricing CSV Generator", "🧹 Anomaly Cleaner"])
+# --- Sidebar: pricing configuration --------------------------------------
+with st.sidebar:
+    st.header("⚙️ Pricing config")
+    mode = st.radio(
+        "Operation mode",
+        options=list(MODE_LABELS),
+        format_func=lambda m: MODE_LABELS[m],
+    )
+    st.caption(MODE_HELP[mode])
 
-with tab1:
-    col1, col2 = st.columns([3, 1])
-    
-    with col2:
-        st.subheader("Config")
-        mode = st.radio("Mode:", ["BAU", "ASP", "Event Mode", "Auto-Detect All", "Manual Selector"])
-        
-        all_possible_keys = [
-            'UT_disc_percent_cat', 'mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent',
-            'custom_15', 'custom_14', 'UT_absolute', 'LT_absolute'
+    with st.expander("🔑 Keys to write", expanded=(mode == "Manual")):
+        st.caption("Tick the database keys this run should output.")
+        defaults = MODE_KEYS[mode]
+        selected_keys = [
+            k for k in ALL_KEYS
+            if st.checkbox(k, value=(k in defaults), key=f"cb_{mode}_{k}")
         ]
-        
-        key_map = {
-            "BAU": ['UT_disc_percent_cat', 'UT_disc_percent', 'LT_disc_percent'],
-            "ASP": ['custom_14', 'UT_absolute', 'LT_absolute'],
-            "Event Mode": ['mrp_disc_percent', 'UT_disc_percent', 'LT_disc_percent', 'custom_15', 'UT_absolute', 'LT_absolute'],
-            "Auto-Detect All": all_possible_keys,
-            "Manual Selector": all_possible_keys
-        }
-        
-        st.write("**Keys to Include:**")
-        current_keys = key_map[mode]
-        selected_keys = [k for k in all_possible_keys if st.checkbox(k, value=(k in current_keys), key=f"cb_{k}_{mode}")]
-        
-        generate_btn = st.button("Generate Pricing CSV", type="primary")
 
-    with col1:
-        st.info("""
-        **LT Instruction Examples:**
-        - `40, LT 35` -> UT is 40, LT is 35 (Absolute)
-        - `40, LT +5` -> UT is 40, LT is 45 (Addition)
-        - `1200, LT -100` -> UT is 1200, LT is 1100 (Subtraction)
-        """)
-        user_input = st.text_area("Paste Scenarios here:", height=400)
+tab_price, tab_clean = st.tabs(["🚀 Pricing CSV Generator", "🧹 Anomaly Cleaner"])
 
-    if generate_btn and user_input:
-        res_df = parse_advanced_scenarios(user_input, mode, selected_keys)
-        if not res_df.empty:
-            st.success(f"Processed {len(res_df.fsn.unique())} FSNs")
-            st.dataframe(res_df, use_container_width=True)
-            st.download_button("📥 Download CSV", res_df.to_csv(index=False).encode('utf-8'), "pricing_upload.csv", "text/csv")
+# --- Tab 1: pricing -------------------------------------------------------
+with tab_price:
+    left, right = st.columns([3, 2], gap="large")
+
+    with left:
+        st.subheader("Scenario input")
+        user_input = st.text_area(
+            "Paste FSNs and instructions (one per line):",
+            height=340,
+            placeholder="SOPFZ2G8DYPZA3TF 34, LT 39\nSPPGM5H6HHUBZQNN LT 60\nABCDEFGH12345678 0 LT 20",
+        )
+        go = st.button("🚀 Process data", type="primary", use_container_width=True)
+
+    with right:
+        with st.expander("📖 How to write a line", expanded=True):
+            st.markdown(
+                "- `FSN 34` → UT **34%**, LT mirrors UT (**34%**)\n"
+                "- `FSN 34, LT 39` → UT **34%**, LT **39%**\n"
+                "- `FSN 34, LT +5` → UT **34%**, LT **39%**\n"
+                "- `FSN 1200, LT -100` → UT **₹1200**, LT **₹1100**\n"
+                "- `FSN 2,279` → **₹2279** (comma ignored)\n"
+                "- `FSN LT 60` → only the **LT** key is written\n"
+                "- `FSN 0 LT 20` → UT **0%**, LT **20%** (zeros are kept)"
+            )
+        st.info("FSNs are 16-character codes (A–Z, 0–9). Everything after a code, "
+                "up to the next one, is read as its instruction.")
+
+    if go:
+        if not user_input.strip():
+            st.warning("Paste at least one FSN line first.")
+        elif not selected_keys:
+            st.warning("Select at least one key in the sidebar.")
+        else:
+            df = parse_scenarios(user_input, mode, selected_keys)
+            if df.empty:
+                st.error("No FSNs recognised. FSNs must be 16-character codes (A–Z, 0–9).")
+            else:
+                st.success(f"Processed {df['fsn'].nunique()} FSN(s) → {len(df)} rows.")
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "📥 Download pricing CSV",
+                    df.to_csv(index=False).encode("utf-8"),
+                    file_name="pricing_upload.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+# --- Tab 2: anomaly cleaner ----------------------------------------------
+with tab_clean:
+    st.subheader("Anomaly cleaner")
+    st.caption('Drops SR_ test rules and MRP ≤ 100 rows, then marks the rest "Not anomaly".')
+
+    up = st.file_uploader("Upload tracking export", type=["xlsx", "csv"])
+    if up is not None:
+        try:
+            raw = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Could not read the file: {e}")
+            raw = None
+
+        if raw is not None:
+            st.write(f"Loaded **{len(raw)}** rows · **{len(raw.columns)}** columns.")
+            if st.button("✨ Run deep clean", type="primary"):
+                clean, stats = clean_anomalies(raw)
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Rows in", stats["input_rows"])
+                c2.metric(
+                    "Removed",
+                    stats["input_rows"] - stats["output_rows"],
+                    help=f"SR_ rules: {stats['dropped_sr']} · MRP≤100: {stats['dropped_low_mrp']}",
+                )
+                c3.metric("Rows out", stats["output_rows"])
+
+                missing = [n for n, c in stats["columns"].items() if c is None]
+                if missing:
+                    st.warning("Couldn't find a column for: " + ", ".join(missing)
+                               + ". Those step(s) were skipped.")
+
+                st.dataframe(clean.head(200), use_container_width=True, hide_index=True)
+                fname = f"Anomalies_Cleaned_{ist_now():%d-%m-%Y_%H-%M}.csv"
+                st.download_button(
+                    "📥 Download cleaned CSV",
+                    clean.to_csv(index=False).encode("utf-8"),
+                    file_name=fname,
+                    mime="text/csv",
+                )
