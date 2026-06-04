@@ -181,7 +181,8 @@ def ist_now():
 # =========================================================================
 #  UI
 # =========================================================================
-st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="expanded")
 
 MODE_LABELS = {
     "BAU":   "BAU · Standard discounts (%)",
@@ -212,23 +213,27 @@ st.markdown(
 
       .block-container {padding-top: 2.2rem; max-width: 1180px;}
 
-      .app-header {border-bottom: 1px solid #e8eaf0; padding-bottom: 0.9rem; margin-bottom: 1.6rem;}
-      .app-header h1 {font-size: 1.6rem; font-weight: 700; color: #11131a; margin: 0; letter-spacing: -0.01em;}
-      .app-header p {font-size: 0.92rem; color: #6b7280; margin: 0.28rem 0 0 0;}
+      /* Header text inherits the theme colour, so it shows on dark AND light */
+      .app-header {border-bottom: 1px solid rgba(128,128,128,.25); padding-bottom: 0.9rem; margin-bottom: 1.6rem;}
+      .app-header h1 {font-size: 1.6rem; font-weight: 700; margin: 0; letter-spacing: -0.01em;}
+      .app-header p {font-size: 0.92rem; color: #8b8f9a; margin: 0.28rem 0 0 0;}
 
       .stTabs [data-baseweb="tab-list"] {gap: 0.4rem;}
       .stTabs [data-baseweb="tab"] {font-weight: 600; font-size: 0.92rem; padding: 0.5rem 0.2rem;}
+      .stTabs [data-baseweb="tab-highlight"] {background-color: #4f46e5;}
+      .stTabs [aria-selected="true"] {color: #4f46e5 !important;}
 
-      [data-testid="stMetric"] {background: #f7f8fb; border: 1px solid #eceef3; border-radius: 12px; padding: 0.9rem 1rem;}
-      [data-testid="stMetricLabel"] {color: #6b7280; font-weight: 500;}
+      /* Translucent fills adapt to whatever background the theme uses */
+      [data-testid="stMetric"] {background: rgba(128,128,128,.08); border: 1px solid rgba(128,128,128,.18); border-radius: 12px; padding: 0.9rem 1rem;}
+      [data-testid="stMetricLabel"] {opacity: .7; font-weight: 500;}
 
-      .stButton > button, .stDownloadButton > button {border-radius: 10px; font-weight: 600; border: 1px solid #d7dae3; transition: all .15s ease;}
-      .stButton > button[kind="primary"] {background: #4f46e5; border-color: #4f46e5;}
+      .stButton > button, .stDownloadButton > button {border-radius: 10px; font-weight: 600; transition: all .15s ease;}
+      .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {background: #4f46e5; border-color: #4f46e5; color: #fff;}
       .stButton > button[kind="primary"]:hover {background: #4338ca; border-color: #4338ca;}
 
       .stTextArea textarea {border-radius: 10px; font-family: 'SFMono-Regular', Menlo, monospace; font-size: 0.88rem;}
 
-      section[data-testid="stSidebar"] {background: #fafbfc; border-right: 1px solid #eef0f4;}
+      section[data-testid="stSidebar"] {border-right: 1px solid rgba(128,128,128,.18);}
       section[data-testid="stSidebar"] h2 {font-size: 1.05rem; font-weight: 700;}
     </style>
     """,
