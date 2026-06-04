@@ -181,7 +181,7 @@ def ist_now():
 # =========================================================================
 #  UI
 # =========================================================================
-st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide",
+st.set_page_config(page_title="Pricing Console", page_icon="🛡️", layout="wide",
                    initial_sidebar_state="collapsed")
 
 MODE_LABELS = {
@@ -211,12 +211,12 @@ st.markdown(
       #MainMenu, footer {visibility: hidden;}
       [data-testid="stToolbar"] {visibility: hidden;}
 
-      .block-container {padding-top: 2.2rem; max-width: 1180px;}
+      .block-container {padding-top: 1rem; max-width: 1180px;}
 
       /* Header text inherits the theme colour, so it shows on dark AND light */
-      .app-header {border-bottom: 1px solid rgba(128,128,128,.25); padding-bottom: 0.9rem; margin-bottom: 1.6rem;}
-      .app-header h1 {font-size: 1.6rem; font-weight: 700; margin: 0; letter-spacing: -0.01em;}
-      .app-header p {font-size: 0.92rem; color: #8b8f9a; margin: 0.28rem 0 0 0;}
+      .app-header {border-bottom: 1px solid rgba(128,128,128,.25); padding-bottom: 0.6rem; margin-bottom: 1.1rem;}
+      .app-header h1 {font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.01em;}
+      .app-header p {font-size: 0.9rem; color: #8b8f9a; margin: 0.2rem 0 0 0;}
 
       .stTabs [data-baseweb="tab-list"] {gap: 0.4rem;}
       .stTabs [data-baseweb="tab"] {font-weight: 600; font-size: 0.92rem; padding: 0.5rem 0.2rem;}
@@ -243,7 +243,7 @@ st.markdown(
 st.markdown(
     """
     <div class="app-header">
-      <h1>Pricing Operations Hub</h1>
+      <h1>Pricing Console</h1>
       <p>Compile free-text pricing notes into upload-ready files, and scrub anomaly exports in one pass.</p>
     </div>
     """,
@@ -253,38 +253,32 @@ st.markdown(
 tab_price, tab_clean = st.tabs(["Pricing CSV Generator", "Anomaly Cleaner"])
 
 with tab_price:
-    # --- Config, inline at the top of the tab (always visible) ----------
-    mode = st.radio(
-        "Operation mode",
-        options=list(MODE_LABELS),
-        horizontal=True,
-        format_func=lambda m: m,
-    )
-    st.caption(f"**{MODE_LABELS[mode]}** — {MODE_HELP[mode]}")
+    main_col, cfg_col = st.columns([2.3, 1], gap="large")
 
-    with st.expander("Keys to write", expanded=(mode == "Manual")):
-        defaults = MODE_KEYS[mode]
-        kcols = st.columns(4)
-        selected_keys = [
-            k for j, k in enumerate(ALL_KEYS)
-            if kcols[j % 4].checkbox(k, value=(k in defaults), key=f"cb_{mode}_{k}")
-        ]
+    with cfg_col:
+        mode = st.radio("Mode", options=list(MODE_LABELS), format_func=lambda m: m)
+        st.caption(MODE_HELP[mode])
+        with st.expander("Keys to write", expanded=(mode == "Manual")):
+            defaults = MODE_KEYS[mode]
+            selected_keys = [
+                k for k in ALL_KEYS
+                if st.checkbox(k, value=(k in defaults), key=f"cb_{mode}_{k}")
+            ]
 
-    st.divider()
-
-    user_input = st.text_area(
-        "Scenario input",
-        height=280,
-        placeholder="SOPFZ2G8DYPZA3TF 34, LT 39\nSPPGM5H6HHUBZQNN LT 60\nABCDEFGH12345678 0 LT 20",
-        help="Each FSN is a 16-character code (A-Z, 0-9). Text up to the next code is its instruction.",
-    )
-    go = st.button("Process data", type="primary")
+    with main_col:
+        user_input = st.text_area(
+            "Scenario input",
+            height=300,
+            placeholder="SOPFZ2G8DYPZA3TF 34, LT 39\nSPPGM5H6HHUBZQNN LT 60\nABCDEFGH12345678 0 LT 20",
+            help="Each FSN is a 16-character code (A-Z, 0-9). Text up to the next code is its instruction.",
+        )
+        go = st.button("Process data", type="primary")
 
     if go:
         if not user_input.strip():
             st.warning("Paste at least one FSN line first.")
         elif not selected_keys:
-            st.warning("Select at least one key above.")
+            st.warning("Select at least one key on the right.")
         else:
             df = parse_scenarios(user_input, mode, selected_keys)
             if df.empty:
