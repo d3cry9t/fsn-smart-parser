@@ -1,10 +1,198 @@
 from datetime import datetime
 
-import pandas as pd
 import streamlit as st
 
-from pricing_logic import ALL_KEYS, MODE_KEYS, parse_scenarios, clean_anomalies
+import re
+import pandas as pd
 
+# --- Database keys, grouped by the kind of value they carry --------------
+PERC_KEYS = ("UT_disc_percent_cat", "mrp_disc_percent", "UT_disc_percent", "LT_disc_percent")
+ASP_KEYS = ("custom_15", "custom_14", "UT_absolute", "LT_absolute")
+
+ALL_KEYS = (
+    "UT_disc_percent_cat", "mrp_disc_percent", "UT_disc_percent", "LT_disc_percent",
+    "custom_15", "custom_14", "UT_absolute", "LT_absolute",
+)
+
+# Which keys each mode pre-selects.
+MODE_KEYS = {
+    "BAU":   ["UT_disc_percent_cat", "UT_disc_percent", "LT_disc_percent"],
+    "ASP":   ["custom_14", "UT_absolute", "LT_absolute"],
+    "Event": ["mrp_disc_percent", "UT_disc_percent", "LT_disc_percent",
+              "custom_15", "UT_absolute", "LT_absolute"],
+    "Auto":  list(ALL_KEYS),
+    "Manual": list(ALL_KEYS),
+}
+
+_NUM = r"-?\d+(?:\.\d+)?"
+_OUT_COLS = ["fsn", "key", "value", "expiry"]
+
+
+def _value_kind(value):
+    """A number in 0..100 is a percentage; anything else is an absolute price."""
+    if value is None:
+        return None
+    return "perc" if 0 <= value <= 100 else "asp"
+
+
+def parse_scenarios(raw_text, mode, selected_keys):
+    """Translate free-text pricing notes into upload rows.
+
+    mode is one of: BAU, ASP, Event, Auto, Manual.
+    Returns a DataFrame with columns fsn / key / value / expiry.
+    """
+    if not selected_keys:
+        return pd.DataFrame(columns=_OUT_COLS)
+
+    blocks = re.split(r"([A-Z0-9]{16})", raw_text)
+    if len(blocks) < 2:
+        return pd.DataFrame(columns=_OUT_COLS)
+
+    rows = []
+    for i in range(1, len(blocks), 2):
+        fsn = blocks[i].strip()
+        context = blocks[i + 1].upper() if i + 1 < len(blocks) else ""
+
+        # FIX 2: "2,279" is one number (2279). Drop commas only when they sit
+        # *between two digits*, so the separator in "40, LT 35" stays intact.
+        context = re.sub(r"(?<=\d),(?=\d)", "", context)
+
+        is_event = (mode == "Event") or any(w in context for w in ("SALE", "EVENT", "LIVE"))
+
+        # ---- Detect the LT instruction ---------------------------------
+        lt_abs = None    # "LT 60"        -> set lower tier to 60
+        lt_rel = None    # "LT +5"/"-100" -> shift lower tier by the delta
+        lt_span = None   # the text we consumed, removed before reading the base
+
+        m_abs = re.search(r"\bLT\s*(\d+(?:\.\d+)?)\b", context)
+        if m_abs:
+            lt_abs = float(m_abs.group(1))
+            lt_span = m_abs.group(0)
+        else:
+            m_signed = re.search(r"(?:LT\s*)?([+\-]\s*\d+(?:\.\d+)?)", context)
+            m_plus = re.search(r"\bPLUS\s*(\d+(?:\.\d+)?)", context)
+            m_minus = re.search(r"\bMINUS\s*(\d+(?:\.\d+)?)", context)
+            if m_signed:
+                lt_rel = float(re.sub(r"\s+", "", m_signed.group(1)))
+                lt_span = m_signed.group(0)
+            elif m_plus:
+                lt_rel = float(m_plus.group(1))
+                lt_span = m_plus.group(0)
+            elif m_minus:
+                lt_rel = -float(m_minus.group(1))
+                lt_span = m_minus.group(0)
+
+        # ---- Read the base (upper-tier) numbers ------------------------
+        base_text = context.replace(lt_span, " ", 1) if lt_span else context
+        base_perc = None
+        base_asp = None
+        for tok in re.findall(_NUM, base_text):
+            num = float(tok)
+            if 0 <= num <= 100:          # FIX 1: 0 is a valid percentage
+                base_perc = num
+            elif num > 100 or num < 0:
+                base_asp = num
+
+        # Which tier does the LT instruction belong to?
+        #  - absolute "LT 60": by magnitude (0..100 -> %, else ₹)
+        #  - relative "LT +5/-100": attach to whichever base exists; if that is
+        #    ambiguous (hybrid) fall back to magnitude (a >=100 shift is ₹).
+        if lt_abs is not None:
+            lt_kind = _value_kind(lt_abs)
+        elif lt_rel is not None:
+            if base_perc is not None and base_asp is None:
+                lt_kind = "perc"
+            elif base_asp is not None and base_perc is None:
+                lt_kind = "asp"
+            else:
+                lt_kind = "perc" if abs(lt_rel) < 100 else "asp"
+        else:
+            lt_kind = None
+
+        # ---- Emit the selected keys ------------------------------------
+        for key in selected_keys:
+            is_perc = key in PERC_KEYS
+            is_asp = key in ASP_KEYS
+            is_lt = key.startswith("LT")
+            kind = "perc" if is_perc else ("asp" if is_asp else None)
+            base = base_perc if is_perc else (base_asp if is_asp else None)
+
+            # mode-aware swaps: cat<->mrp and custom_14<->custom_15
+            if mode != "Manual":
+                if is_event and key in ("UT_disc_percent_cat", "custom_14"):
+                    continue
+                if not is_event and key in ("mrp_disc_percent", "custom_15"):
+                    continue
+
+            val = None
+            if is_lt:
+                # FIX 3: an explicit LT can stand on its own, with no base.
+                if lt_abs is not None and lt_kind == kind:
+                    val = lt_abs                       # explicit "LT 60"
+                elif lt_rel is not None and lt_kind == kind and base is not None:
+                    val = base + lt_rel                # relative shift
+                elif base is not None:
+                    val = base                         # default: LT mirrors UT
+            else:
+                if base is not None:
+                    val = base
+
+            if val is not None:
+                rows.append({"fsn": fsn, "key": key, "value": val, "expiry": ""})
+
+    return pd.DataFrame(rows, columns=_OUT_COLS)
+
+
+# --- Anomaly cleaner ------------------------------------------------------
+def _find_col(df, needle):
+    needle = needle.lower()
+    for c in df.columns:
+        if needle in str(c).lower():
+            return c
+    return None
+
+
+def clean_anomalies(df):
+    """Apply the 3-step cleanse described in the manual.
+
+    1) drop rows whose Rule id starts with "SR_"
+    2) drop rows whose MRP <= 100
+    3) force the remaining Anomaly status field to "Not anomaly"
+
+    Returns (clean_df, stats).
+    """
+    out = df.copy()
+    stats = {"input_rows": len(out)}
+
+    rule_col = _find_col(out, "rule id")
+    mrp_col = _find_col(out, "mrp")
+    flag_col = _find_col(out, "anomaly")
+
+    if rule_col is not None:
+        mask = out[rule_col].astype(str).str.startswith("SR_")
+        stats["dropped_sr"] = int(mask.sum())
+        out = out[~mask]
+    else:
+        stats["dropped_sr"] = 0
+
+    if mrp_col is not None:
+        mrp_num = pd.to_numeric(out[mrp_col], errors="coerce")
+        mask = (mrp_num <= 100).fillna(False)
+        stats["dropped_low_mrp"] = int(mask.sum())
+        out = out[~mask]
+    else:
+        stats["dropped_low_mrp"] = 0
+
+    if flag_col is not None:
+        out[flag_col] = "Not anomaly"
+
+    out = out.reset_index(drop=True)
+    stats["output_rows"] = len(out)
+    stats["columns"] = {"rule": rule_col, "mrp": mrp_col, "flag": flag_col}
+    return out, stats
+
+
+# ====================  STREAMLIT UI  ====================
 st.set_page_config(page_title="Pricing Ops Hub", page_icon="🛡️", layout="wide")
 
 # --- Mode metadata --------------------------------------------------------
