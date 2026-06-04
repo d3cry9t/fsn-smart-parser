@@ -303,7 +303,7 @@ with tab_price:
         else:
             df = parse_scenarios(user_input, mode, selected_keys)
             if df.empty:
-                st.error("No FSNs recognised - codes must be 16 characters (A-Z, 0-9).")
+                st.error("Wrong format or FSNs not recognized")
             else:
                 st.success(f"Processed {df['fsn'].nunique()} FSN(s) -> {len(df)} rows.")
                 st.dataframe(df, use_container_width=True, hide_index=True)
