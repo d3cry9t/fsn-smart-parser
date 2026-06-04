@@ -211,11 +211,11 @@ st.markdown(
       #MainMenu, footer {visibility: hidden;}
       [data-testid="stToolbar"] {visibility: hidden;}
 
-      .block-container {padding-top: 1rem; max-width: 1180px;}
+      .block-container {padding-top: 1.9rem; max-width: 1180px;}
 
       /* Header text inherits the theme colour, so it shows on dark AND light */
-      .app-header {border-bottom: 1px solid rgba(128,128,128,.25); padding-bottom: 0.6rem; margin-bottom: 1.1rem;}
-      .app-header h1 {font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.01em;}
+      .app-header {border-bottom: 1px solid rgba(128,128,128,.25); padding-bottom: 0.6rem; margin: 0.3rem 0 1.1rem;}
+      .app-header h1 {font-size: 1.5rem; font-weight: 700; margin: 0; line-height: 1.3; letter-spacing: -0.01em;}
       .app-header p {font-size: 0.9rem; color: #8b8f9a; margin: 0.2rem 0 0 0;}
 
       .stTabs [data-baseweb="tab-list"] {gap: 0.4rem;}
@@ -256,7 +256,28 @@ with tab_price:
     main_col, cfg_col = st.columns([2.3, 1], gap="large")
 
     with cfg_col:
-        mode = st.radio("Mode", options=list(MODE_LABELS), format_func=lambda m: m)
+        st.markdown("**Mode**")
+        if "mode" not in st.session_state:
+            st.session_state.mode = "BAU"
+
+        modes = list(MODE_LABELS)
+        clicked = None
+        for r in range(0, len(modes), 2):
+            bcols = st.columns(2)
+            for c, m in enumerate(modes[r:r + 2]):
+                picked = st.session_state.mode == m
+                if bcols[c].button(
+                    m,
+                    key=f"modebtn_{m}",
+                    type="primary" if picked else "secondary",
+                    use_container_width=True,
+                ):
+                    clicked = m
+        if clicked and clicked != st.session_state.mode:
+            st.session_state.mode = clicked
+            st.rerun()
+
+        mode = st.session_state.mode
         st.caption(MODE_HELP[mode])
         with st.expander("Keys to write", expanded=(mode == "Manual")):
             defaults = MODE_KEYS[mode]
