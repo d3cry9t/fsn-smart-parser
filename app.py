@@ -145,22 +145,27 @@ def _find_col(df, needle):
 
 
 def clean_anomalies(df):
-    """Drop SR_ test rules + MRP<=100 rows, then force status to 'Not anomaly'."""
+    """Drop SR_ test rules + MRP<=100 rows, then replace '?' with 'Not anomaly'."""
     out = df.copy()
     stats = {"input_rows": len(out)}
 
+    # Find columns dynamically based on names to avoid breaking if column orders change
     rule_col = _find_col(out, "rule id")
     mrp_col = _find_col(out, "mrp")
     flag_col = _find_col(out, "anomaly")
 
+    # 1. Remove rows where Rule id starts with 'SR_'
     if rule_col is not None:
-        mask = out[rule_col].astype(str).str.startswith("SR_")
+        # astype(str) and strip() ensure we don't miss it due to leading spaces or NaN
+        mask = out[rule_col].astype(str).str.strip().str.startswith("SR_")
         stats["dropped_sr"] = int(mask.sum())
         out = out[~mask]
     else:
         stats["dropped_sr"] = 0
 
+    # 2. Remove rows where MRP <= 100
     if mrp_col is not None:
+        # Convert to numeric, forcing errors to NaN, then check <= 100
         mrp_num = pd.to_numeric(out[mrp_col], errors="coerce")
         mask = (mrp_num <= 100).fillna(False)
         stats["dropped_low_mrp"] = int(mask.sum())
@@ -168,14 +173,18 @@ def clean_anomalies(df):
     else:
         stats["dropped_low_mrp"] = 0
 
+    # 3. Replace '?' with 'Not anomaly' in the Anomaly column
     if flag_col is not None:
-        out[flag_col] = "Not anomaly"
+        # Specifically target '?' (ignoring random whitespace) and leave other values alone
+        out[flag_col] = out[flag_col].apply(
+            lambda x: "Not anomaly" if str(x).strip() == "?" else x
+        )
 
     out = out.reset_index(drop=True)
     stats["output_rows"] = len(out)
     stats["columns"] = {"rule": rule_col, "mrp": mrp_col, "flag": flag_col}
+    
     return out, stats
-
 
 def ist_now():
     try:
