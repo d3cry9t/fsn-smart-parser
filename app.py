@@ -48,6 +48,9 @@ def parse_scenarios(raw_text, mode, selected_keys):
         fsn = blocks[i].strip()
         context = blocks[i + 1].upper() if i + 1 < len(blocks) else ""
 
+        # Check if "ASP" is explicitly mentioned in the text following the FSN
+        has_asp_keyword = "ASP" in context
+
         # "2,279" is one number (2279); drop commas only between two digits.
         context = re.sub(r"(?<=\d),(?=\d)", "", context)
 
@@ -80,20 +83,25 @@ def parse_scenarios(raw_text, mode, selected_keys):
         base_asp = None
         for tok in re.findall(_NUM, base_text):
             num = float(tok)
-            if 0 <= num <= 100:          # 0 is a valid percentage
+            # If "ASP" is in the text, treat the number as an absolute value regardless of size
+            if has_asp_keyword:
+                base_asp = num
+            elif 0 <= num <= 100:          # 0 is a valid percentage
                 base_perc = num
             elif num > 100 or num < 0:
                 base_asp = num
 
         if lt_abs is not None:
-            lt_kind = _value_kind(lt_abs)
+            # Force ASP type if keyword is present
+            lt_kind = "asp" if has_asp_keyword else _value_kind(lt_abs)
         elif lt_rel is not None:
             if base_perc is not None and base_asp is None:
                 lt_kind = "perc"
             elif base_asp is not None and base_perc is None:
                 lt_kind = "asp"
             else:
-                lt_kind = "perc" if abs(lt_rel) < 100 else "asp"
+                # Force ASP if keyword is present, otherwise fallback to magnitude logic
+                lt_kind = "asp" if has_asp_keyword else ("perc" if abs(lt_rel) < 100 else "asp")
         else:
             lt_kind = None
 
@@ -350,4 +358,4 @@ with tab_clean:
                     clean.to_csv(index=False).encode("utf-8"),
                     file_name=f"Anomalies_Cleaned_{ist_now():%d-%m-%Y_%H-%M}.csv",
                     mime="text/csv",
-                )
+                ) 
