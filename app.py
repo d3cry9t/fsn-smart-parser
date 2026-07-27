@@ -137,10 +137,24 @@ def parse_scenarios(raw_text, mode, selected_keys):
 
 
 def _find_col(df, needle):
-    needle = needle.lower()
+    """Smarter column finder: tries exact match first, then word boundary, then substring."""
+    needle = needle.lower().strip()
+    
+    # 1. Try exact match first (case-insensitive)
+    for c in df.columns:
+        if str(c).lower().strip() == needle:
+            return c
+            
+    # 2. Try exact word match (so 'mrp' doesn't match 'mrp_discount')
+    for c in df.columns:
+        if re.search(rf'\b{re.escape(needle)}\b', str(c).lower()):
+            return c
+            
+    # 3. Fallback to basic substring
     for c in df.columns:
         if needle in str(c).lower():
             return c
+            
     return None
 
 
@@ -149,33 +163,35 @@ def clean_anomalies(df):
     out = df.copy()
     stats = {"input_rows": len(out)}
 
-    # Find columns dynamically based on names to avoid breaking if column orders change
+    # Explicitly target the correct compound names first
     rule_col = _find_col(out, "rule id")
     mrp_col = _find_col(out, "mrp")
-    flag_col = _find_col(out, "anomaly")
+    
+    # Look for "anomaly/not anomaly" specifically before falling back to just "anomaly"
+    flag_col = _find_col(out, "anomaly/not anomaly") 
+    if not flag_col:
+        flag_col = _find_col(out, "anomaly")
 
     # 1. Remove rows where Rule id starts with 'SR_'
     if rule_col is not None:
-        # astype(str) and strip() ensure we don't miss it due to leading spaces or NaN
         mask = out[rule_col].astype(str).str.strip().str.startswith("SR_")
         stats["dropped_sr"] = int(mask.sum())
         out = out[~mask]
     else:
         stats["dropped_sr"] = 0
 
-    # 2. Remove rows where MRP <= 100
+    # 2. Remove rows where MRP <= 100 (handling commas like "1,200")
     if mrp_col is not None:
-        # Convert to numeric, forcing errors to NaN, then check <= 100
-        mrp_num = pd.to_numeric(out[mrp_col], errors="coerce")
+        mrp_clean = out[mrp_col].astype(str).str.replace(',', '', regex=False)
+        mrp_num = pd.to_numeric(mrp_clean, errors="coerce")
         mask = (mrp_num <= 100).fillna(False)
         stats["dropped_low_mrp"] = int(mask.sum())
         out = out[~mask]
     else:
         stats["dropped_low_mrp"] = 0
 
-    # 3. Replace '?' with 'Not anomaly' in the Anomaly column
+    # 3. Replace '?' with 'Not anomaly' in the correct Anomaly column
     if flag_col is not None:
-        # Specifically target '?' (ignoring random whitespace) and leave other values alone
         out[flag_col] = out[flag_col].apply(
             lambda x: "Not anomaly" if str(x).strip() == "?" else x
         )
