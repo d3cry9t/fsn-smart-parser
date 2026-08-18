@@ -139,22 +139,22 @@ def parse_scenarios(raw_text, mode, selected_keys):
 def _find_col(df, needle):
     """Smarter column finder: tries exact match first, then word boundary, then substring."""
     needle = needle.lower().strip()
-    
+
     # 1. Try exact match first (case-insensitive)
     for c in df.columns:
         if str(c).lower().strip() == needle:
             return c
-            
+
     # 2. Try exact word match (so 'mrp' doesn't match 'mrp_discount')
     for c in df.columns:
         if re.search(rf'\b{re.escape(needle)}\b', str(c).lower()):
             return c
-            
+
     # 3. Fallback to basic substring
     for c in df.columns:
         if needle in str(c).lower():
             return c
-            
+
     return None
 
 
@@ -166,9 +166,9 @@ def clean_anomalies(df):
     # Explicitly target the correct compound names first
     rule_col = _find_col(out, "rule id")
     mrp_col = _find_col(out, "mrp")
-    
+
     # Look for "anomaly/not anomaly" specifically before falling back to just "anomaly"
-    flag_col = _find_col(out, "anomaly/not anomaly") 
+    flag_col = _find_col(out, "anomaly/not anomaly")
     if not flag_col:
         flag_col = _find_col(out, "anomaly")
 
@@ -199,8 +199,9 @@ def clean_anomalies(df):
     out = out.reset_index(drop=True)
     stats["output_rows"] = len(out)
     stats["columns"] = {"rule": rule_col, "mrp": mrp_col, "flag": flag_col}
-    
+
     return out, stats
+
 
 def ist_now():
     try:
@@ -209,6 +210,19 @@ def ist_now():
     except Exception:
         from datetime import timedelta, timezone
         return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+
+@st.cache_data(show_spinner=False)
+def _read_upload(file_bytes, file_name):
+    """Cached file parse — keyed on raw bytes + name so identical uploads
+    don't get re-read on every Streamlit rerun (checkbox clicks, etc.)."""
+    import io
+    buf = io.BytesIO(file_bytes)
+    if file_name.lower().endswith(".csv"):
+        return pd.read_csv(buf)
+    # Pin the engine explicitly; relying on auto-detection is what causes
+    # the intermittent "engine not found" failures on some deploys.
+    return pd.read_excel(buf, engine="openpyxl")
 
 
 # =========================================================================
@@ -349,19 +363,39 @@ with tab_price:
 
 with tab_clean:
     st.caption('Drops SR_ test rules and MRP <= 100 rows, then marks the rest "Not anomaly".')
-    up = st.file_uploader("Upload tracking export", type=["xlsx", "csv"])
+    up = st.file_uploader("Upload tracking export", type=["xlsx", "xls", "csv"], key="anomaly_upload")
 
     if up is not None:
+        # Reset cached results if a different file was uploaded
+        if st.session_state.get("anomaly_file_id") != up.file_id:
+            st.session_state.anomaly_file_id = up.file_id
+            st.session_state.pop("anomaly_clean", None)
+            st.session_state.pop("anomaly_stats", None)
+
+        raw = None
         try:
-            raw = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
+            with st.spinner("Reading file..."):
+                raw = _read_upload(up.getvalue(), up.name)
         except Exception as e:  # noqa: BLE001
-            st.error(f"Could not read the file: {e}")
-            raw = None
+            st.error(
+                f"Could not read the file: {e}\n\n"
+                "If this is an .xlsx file, make sure `openpyxl` is listed in requirements.txt."
+            )
 
         if raw is not None:
             st.write(f"Loaded **{len(raw)}** rows / **{len(raw.columns)}** columns.")
+
             if st.button("Run deep clean", type="primary"):
-                clean, stats = clean_anomalies(raw)
+                with st.spinner("Cleaning..."):
+                    clean, stats = clean_anomalies(raw)
+                st.session_state.anomaly_clean = clean
+                st.session_state.anomaly_stats = stats
+
+            # Render from session_state so results (and the download button)
+            # survive reruns triggered by clicking Download itself.
+            if "anomaly_clean" in st.session_state:
+                clean = st.session_state.anomaly_clean
+                stats = st.session_state.anomaly_stats
 
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Rows in", stats["input_rows"])
@@ -383,4 +417,9 @@ with tab_clean:
                     clean.to_csv(index=False).encode("utf-8"),
                     file_name=f"Anomalies_Cleaned_{ist_now():%d-%m-%Y_%H-%M}.csv",
                     mime="text/csv",
-                ) 
+                )
+    else:
+        # Uploader cleared -> drop any stale results
+        st.session_state.pop("anomaly_clean", None)
+        st.session_state.pop("anomaly_stats", None)
+        st.session_state.pop("anomaly_file_id", None)
